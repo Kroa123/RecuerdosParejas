@@ -1,88 +1,175 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { listItems } from '../lib/api'
-import { videoEmbed } from '../lib/media'
+import { buildGroups, deleteCategory, loadScope } from '../lib/categories'
+import { formatDate } from '../lib/media'
+import { SCOPE_TEXT, plural } from '../lib/scopes'
 import Modal from '../components/Modal'
 import UploadForm from '../components/UploadForm'
+import CategoryForm from '../components/CategoryForm'
+import Icon from '../components/Icon'
+import { VideoThumb } from '../components/VideoPlayer'
 import { useToast } from '../components/Toast'
+import { useConfirm } from '../components/Confirm'
 
-export function groupByCategory(items) {
-  const map = new Map()
-  for (const it of items) {
-    const key = it.category || 'Sin lugar'
-    if (!map.has(key)) map.set(key, [])
-    map.get(key).push(it)
-  }
-  return [...map.entries()].map(([name, list]) => ({ name, list }))
+function Cover({ group, kind }) {
+  const list = group.list
+  if (!list.length)
+    return (
+      <div className="cover-empty">
+        <Icon name={kind === 'video' ? 'film' : 'image'} size={28} />
+        <span>Vacío</span>
+      </div>
+    )
+  if (kind === 'video')
+    return (
+      <>
+        <VideoThumb src={list[0].src} />
+        <span className="play-badge"><Icon name="play" size={16} fill /></span>
+      </>
+    )
+  if (list.length >= 3)
+    return (
+      <div className="mosaic">
+        {list.slice(0, 3).map((p) => <img key={p.id} src={p.src} alt="" loading="lazy" />)}
+      </div>
+    )
+  return <img src={list[0].src} alt="" loading="lazy" />
 }
 
-function Cover({ item, kind }) {
-  if (!item) return <div className="cover-empty">{kind === 'video' ? '🎬' : '📷'}</div>
-  if (kind === 'photo') return <img src={item.src} alt="" loading="lazy" />
-  const v = videoEmbed(item.src)
-  const yt = v?.src.match(/youtube\.com\/embed\/([\w-]+)/)
-  if (yt) return <img src={`https://img.youtube.com/vi/${yt[1]}/hqdefault.jpg`} alt="" loading="lazy" />
-  if (v?.kind === 'file') return <video src={v.src + '#t=0.5'} muted preload="metadata" />
-  return <div className="cover-empty">🎬</div>
+export function SkeletonGrid({ n = 6 }) {
+  return (
+    <div className="cat-grid">
+      {Array.from({ length: n }, (_, i) => (
+        <div key={i} className="cat-card skeleton"><div className="cat-cover" /><div className="cat-body"><i /><i /></div></div>
+      ))}
+    </div>
+  )
 }
 
 export default function Categorias({ kind }) {
-  const [items, setItems] = useState(null)
-  const [open, setOpen] = useState(false)
+  const t = SCOPE_TEXT[kind]
+  const [data, setData] = useState(null)
+  const [modal, setModal] = useState(null) // 'upload' | 'new' | {edit: group}
   const [q, setQ] = useState('')
   const toast = useToast()
-  const isVideo = kind === 'video'
-  const base = isVideo ? '/videos' : '/fotos'
+  const confirm = useConfirm()
 
-  useEffect(() => {
-    setItems(null)
-    listItems(kind).then(setItems).catch((e) => { toast(e.message, 'error'); setItems([]) })
-  }, [kind, toast])
+  // Cada carga invalida la anterior: una respuesta lenta de /fotos no pisa /videos
+  const reqRef = useRef(0)
+  const load = () => {
+    const req = ++reqRef.current
+    const alive = () => req === reqRef.current
+    return loadScope(kind)
+      .then((d) => { if (alive()) setData(d) })
+      .catch((e) => { if (alive()) { toast(e.message, 'error'); setData({ items: [], cats: [] }) } })
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setData(null); load(); return () => { reqRef.current++ } }, [kind])
 
-  const groups = useMemo(() => groupByCategory(items || []), [items])
-  const filtered = groups.filter((g) => g.name.toLowerCase().includes(q.toLowerCase()))
+  const groups = useMemo(() => (data ? buildGroups(data.items, data.cats) : []), [data])
+  const filtered = groups.filter((g) => g.name.toLowerCase().includes(q.trim().toLowerCase()))
+  const names = groups.map((g) => g.name)
+  const total = data?.items.length || 0
+
+  const remove = async (g) => {
+    const ok = await confirm({
+      title: `Eliminar "${g.name}"`,
+      message: g.list.length
+        ? `Se eliminarán también ${plural(g.list.length, t.unit)} de este lugar. No se puede deshacer.`
+        : 'Este lugar está vacío.',
+      confirmText: 'Eliminar lugar',
+      danger: true,
+    })
+    if (!ok) return
+    try {
+      await deleteCategory(g)
+      toast(`"${g.name}" eliminado`)
+      load()
+    } catch (e) {
+      toast(e.message, 'error')
+      load() // puede que una parte sí se haya eliminado
+    }
+  }
+
+  const stop = (fn) => (e) => { e.preventDefault(); e.stopPropagation(); fn() }
 
   return (
     <section>
-      <div className="section-head">
-        <h2 className="script">{isVideo ? 'Nuestros videos' : 'Nuestras fotos'}</h2>
-        <p>{isVideo ? 'Momentos en movimiento, ordenados por lugar.' : 'Cada lugar guarda un pedacito de nuestra historia.'}</p>
-      </div>
+      <header className="page-head">
+        <h1 className="page-title">{t.heading}</h1>
+        <p className="page-sub">{t.sub}</p>
+        <div className="page-actions">
+          <button className="btn ghost" onClick={() => setModal('new')}><Icon name="folderPlus" /> Nuevo lugar</button>
+          <button className="btn" onClick={() => setModal('upload')}><Icon name="upload" /> Subir {t.unit[1]}</button>
+        </div>
+      </header>
+
       <div className="toolbar">
-        <input className="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar lugar…" />
-        <button className="btn" onClick={() => setOpen(true)}>+ {isVideo ? 'Subir videos' : 'Subir fotos'}</button>
+        <label className="search">
+          <Icon name="search" size={16} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar lugar…" />
+          {q && <button type="button" className="icon-btn" onClick={() => setQ('')} aria-label="Limpiar"><Icon name="x" size={14} /></button>}
+        </label>
+        {data && <span className="mono muted">{plural(groups.length, ['lugar', 'lugares'])} · {plural(total, t.unit)}</span>}
       </div>
 
-      {items === null && <div className="loader">♥</div>}
-      {items && groups.length === 0 && (
-        <button className="empty-card" onClick={() => setOpen(true)}>
-          <span>{isVideo ? '🎬' : '📷'}</span>
-          Crea tu primer lugar y sube {isVideo ? 'videos' : 'fotos'}
-        </button>
+      {!data && <SkeletonGrid />}
+
+      {data && groups.length === 0 && (
+        <div className="empty-state">
+          <Icon name={t.icon} size={32} />
+          <h3>Todavía no hay lugares</h3>
+          <p>Crea un lugar (por ejemplo “Cusco 2025”) y empieza a subir {t.unit[1]}.</p>
+          <div className="row gap center">
+            <button className="btn ghost" onClick={() => setModal('new')}><Icon name="folderPlus" /> Nuevo lugar</button>
+            <button className="btn" onClick={() => setModal('upload')}><Icon name="upload" /> Subir {t.unit[1]}</button>
+          </div>
+        </div>
       )}
 
-      <div className="cat-grid">
-        {filtered.map((g, i) => (
-          <Link key={g.name} to={`${base}/${encodeURIComponent(g.name)}`} className="cat-card" style={{ animationDelay: `${i * 0.07}s` }}>
-            <div className="cat-cover">
-              <Cover item={g.list[0]} kind={kind} />
-              {isVideo && <span className="play">▶</span>}
-            </div>
-            <div className="cat-info">
-              <h3>📍 {g.name}</h3>
-              <span>{g.list.length} {isVideo ? 'video' : 'foto'}{g.list.length === 1 ? '' : 's'}</span>
-            </div>
-          </Link>
-        ))}
-      </div>
+      {data && groups.length > 0 && filtered.length === 0 && <p className="empty">Ningún lugar coincide con “{q}”.</p>}
 
-      {open && (
-        <Modal title={isVideo ? 'Subir videos' : 'Subir fotos'} onClose={() => setOpen(false)}>
-          <UploadForm
-            kind={kind}
-            categories={groups.map((g) => g.name)}
-            onDone={(created) => { setItems((cur) => [...created, ...(cur || [])]); setOpen(false) }}
-          />
+      {data && filtered.length > 0 && (
+        <div className="cat-grid">
+          {filtered.map((g, i) => (
+            // El enlace y las herramientas son hermanos (no hay botones dentro de un <a>)
+            <div key={g.name} className="cat-card" style={{ animationDelay: `${Math.min(i, 10) * 40}ms` }}>
+              <Link to={`${t.base}/${encodeURIComponent(g.name)}`} className="cat-link">
+                <div className="cat-cover">
+                  <Cover group={g} kind={kind} />
+                </div>
+                <div className="cat-body">
+                  <h3><Icon name="pin" size={15} /> {g.name}</h3>
+                  {g.description && <p>{g.description}</p>}
+                  <div className="cat-meta mono">
+                    <span>{plural(g.list.length, t.unit)}</span>
+                    {g.list[0] && <span>{formatDate(g.list[0].date, true)}</span>}
+                  </div>
+                </div>
+              </Link>
+              <div className="cat-tools">
+                <button className="tool-btn" title="Editar lugar" aria-label={`Editar lugar ${g.name}`} onClick={stop(() => setModal({ edit: g }))}><Icon name="pencil" size={15} /></button>
+                <button className="tool-btn danger" title="Eliminar lugar" aria-label={`Eliminar lugar ${g.name}`} onClick={stop(() => remove(g))}><Icon name="trash" size={15} /></button>
+              </div>
+            </div>
+          ))}
+          {!q && (
+            <button className="cat-new" onClick={() => setModal('new')}>
+              <Icon name="plus" size={22} />
+              <span>Nuevo lugar</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {modal === 'upload' && (
+        <Modal title={`Subir ${t.unit[1]}`} subtitle="Elige el lugar donde se guardarán." onClose={() => setModal(null)}>
+          <UploadForm kind={kind} categories={names} onDone={() => { setModal(null); load() }} />
+        </Modal>
+      )}
+      {(modal === 'new' || modal?.edit) && (
+        <Modal title={modal.edit ? 'Editar lugar' : 'Nuevo lugar'} onClose={() => setModal(null)}>
+          <CategoryForm scope={kind} group={modal.edit} existing={names} onDone={() => { setModal(null); load() }} />
         </Modal>
       )}
     </section>

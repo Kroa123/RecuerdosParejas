@@ -42,12 +42,12 @@ export default function TulipBouquet() {
           </linearGradient>
         ))}
         <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="#f7dcc0" />
-          <stop offset="100%" stopColor="#e0b48a" />
+          <stop offset="0%" stopColor="#e9cfb4" />
+          <stop offset="100%" stopColor="#b98a63" />
         </linearGradient>
         <linearGradient id="paperIn" x1="0" y1="0" x2="1" y2="0">
-          <stop offset="0%" stopColor="#fff4e8" />
-          <stop offset="100%" stopColor="#f4d9bd" />
+          <stop offset="0%" stopColor="#f3e2cf" />
+          <stop offset="100%" stopColor="#d9b995" />
         </linearGradient>
         <linearGradient id="leaf" x1="0" y1="1" x2="0" y2="0">
           <stop offset="0%" stopColor="#4f8a4b" />

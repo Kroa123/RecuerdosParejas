@@ -7,7 +7,7 @@ export default function Particles() {
   useEffect(() => {
     const canvas = ref.current
     const ctx = canvas.getContext('2d')
-    const colors = ['#ffb38a', '#ff9a8b', '#f4b860', '#ffd6a5', '#e85d75', '#ffc2c7']
+    const colors = ['#e0607e', '#f07a95', '#e9a46f', '#d8b26a', '#9e2c4a', '#f2c1cc']
     let w, h, dpr, raf
     let parts = []
     const mouse = { x: -9999, y: -9999 }
@@ -21,19 +21,35 @@ export default function Particles() {
       vy: -(0.2 + Math.random() * 0.6),
       c: colors[(Math.random() * colors.length) | 0],
       heart: Math.random() < 0.18,
-      a: 0.4 + Math.random() * 0.6,
+      a: 0.25 + Math.random() * 0.5,
       tw: Math.random() * Math.PI * 2,
     })
 
+    // Ajusta el lienzo al tamaño real; solo regenera partículas si el cambio es grande
+    // (en móvil la barra del navegador cambia el alto unos px al hacer scroll)
     const resize = () => {
+      const nw = canvas.clientWidth
+      const nh = canvas.clientHeight
+      const regen = !parts.length || nw !== w || Math.abs(nh - h) >= 120
       dpr = Math.min(window.devicePixelRatio || 1, 2)
-      w = canvas.clientWidth
-      h = canvas.clientHeight
+      w = nw
+      h = nh
       canvas.width = w * dpr
       canvas.height = h * dpr
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      const n = Math.min(140, Math.round((w * h) / 9000))
-      parts = Array.from({ length: n }, () => make(true))
+      if (regen) {
+        const n = Math.min(110, Math.round((w * h) / 12000))
+        parts = Array.from({ length: n }, () => make(true))
+      }
+    }
+    let resizeTimer = 0
+    const onResize = () => {
+      clearTimeout(resizeTimer)
+      resizeTimer = setTimeout(() => {
+        resize()
+        // con movimiento reducido no hay bucle: redibuja una vez tras el cambio
+        if (reduce) tick()
+      }, 180)
     }
 
     const heart = (x, y, s) => {
@@ -70,14 +86,14 @@ export default function Particles() {
           ctx.fill()
         }
       }
-      // líneas suaves entre partículas cercanas
+      // líneas suaves entre partículas cercanas (solo en pantallas anchas: es O(n²))
       ctx.globalAlpha = 1
-      for (let i = 0; i < parts.length; i++) {
+      if (w >= 760) for (let i = 0; i < parts.length; i++) {
         for (let j = i + 1; j < parts.length; j++) {
           const a = parts[i], b = parts[j]
           const d = Math.hypot(a.x - b.x, a.y - b.y)
           if (d < 90) {
-            ctx.strokeStyle = `rgba(255, 170, 140, ${0.18 * (1 - d / 90)})`
+            ctx.strokeStyle = `rgba(224, 96, 126, ${0.12 * (1 - d / 90)})`
             ctx.lineWidth = 1
             ctx.beginPath()
             ctx.moveTo(a.x, a.y)
@@ -99,13 +115,14 @@ export default function Particles() {
 
     resize()
     tick()
-    window.addEventListener('resize', resize)
+    window.addEventListener('resize', onResize)
     window.addEventListener('mousemove', move)
     window.addEventListener('touchmove', move, { passive: true })
     window.addEventListener('mouseout', leave)
     return () => {
       cancelAnimationFrame(raf)
-      window.removeEventListener('resize', resize)
+      clearTimeout(resizeTimer)
+      window.removeEventListener('resize', onResize)
       window.removeEventListener('mousemove', move)
       window.removeEventListener('touchmove', move)
       window.removeEventListener('mouseout', leave)

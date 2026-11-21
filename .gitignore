@@ -24,3 +24,7 @@ dist-ssr
 *.sw?
 .env
 .env.local
+
+# Configuración local del asistente (no se sube)
+CLAUDE.md
+.claude/

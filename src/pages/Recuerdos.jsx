@@ -1,231 +1,184 @@
-import { useEffect, useState } from 'react'
-import { createItem, deleteItem, listItems, updateItem } from '../lib/api'
-import { fileToMedia, formatDate, videoLimitMB } from '../lib/media'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { deleteItem } from '../lib/api'
+import { buildGroups, catOf, deleteCategory, loadScope, NO_CATEGORY } from '../lib/categories'
+import { plural } from '../lib/scopes'
 import { useToast } from '../components/Toast'
-import VideoPlayer from '../components/VideoPlayer'
-import Lightbox from '../components/Lightbox'
+import { useConfirm } from '../components/Confirm'
+import { VideoThumb } from '../components/VideoPlayer'
+import Modal from '../components/Modal'
+import CategoryForm from '../components/CategoryForm'
+import PostComposer from '../components/PostComposer'
+import PostEditForm from '../components/PostEditForm'
+import PostCard from '../components/PostCard'
+import Icon from '../components/Icon'
 
-const AUTHOR_KEY = 'recuerdos.author'
-const getAuthor = () => { try { return localStorage.getItem(AUTHOR_KEY) || '' } catch { return '' } }
-const saveAuthor = (a) => { try { localStorage.setItem(AUTHOR_KEY, a) } catch { /* nada */ } }
-
-function Composer({ onCreated }) {
-  const [text, setText] = useState('')
-  const [title, setTitle] = useState('')
-  const [when, setWhen] = useState('')
-  const [media, setMedia] = useState([])
-  const [link, setLink] = useState('')
-  const [busy, setBusy] = useState(false)
-  const toast = useToast()
-
-  const addFiles = async (files) => {
-    setBusy(true)
-    for (const f of files) {
-      try {
-        const m = await fileToMedia(f)
-        setMedia((cur) => [...cur, m])
-      } catch (e) {
-        toast(e.message, 'error')
-      }
-    }
-    setBusy(false)
-  }
-
-  const addLink = () => {
-    if (!link.trim()) return
-    setMedia((cur) => [...cur, { type: 'video', src: link.trim() }])
-    setLink('')
-  }
-
-  const publish = async (e) => {
-    e.preventDefault()
-    if (!text.trim() && !media.length) return toast('Escribe algo o agrega una foto/video', 'error')
-    setBusy(true)
-    try {
-      const item = await createItem('post', {
-        title: title.trim(),
-        text: text.trim(),
-        media,
-        moment: when ? new Date(when + 'T12:00:00').getTime() : null,
-        comments: [],
-        likes: 0,
-      })
-      onCreated(item)
-      setText(''); setTitle(''); setWhen(''); setMedia([])
-      toast('Recuerdo publicado 💕')
-    } catch (err) {
-      toast(err.message, 'error')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <form className="card composer" onSubmit={publish}>
-      <div className="composer-head">
-        <span className="avatar">♥</span>
-        <input className="composer-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Título del recuerdo (opcional)" />
-      </div>
-      <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="¿Qué momento quieres recordar hoy?" rows={3} />
-      {media.length > 0 && (
-        <div className="preview-grid">
-          {media.map((m, i) => (
-            <div key={i} className="preview">
-              {m.type === 'image' ? <img src={m.src} alt="" /> : m.src.startsWith('data:') ? <video src={m.src} muted /> : <div className="link-chip">🎬 enlace</div>}
-              <button type="button" onClick={() => setMedia(media.filter((_, j) => j !== i))}>✕</button>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="composer-tools">
-        <label className="tool">
-          📷 Fotos / videos
-          <input type="file" accept="image/*,video/*" multiple hidden onChange={(e) => { addFiles([...e.target.files]); e.target.value = '' }} />
-        </label>
-        <label className="tool">
-          📅 <input type="date" value={when} onChange={(e) => setWhen(e.target.value)} />
-        </label>
-        <div className="tool link-tool">
-          🔗
-          <input value={link} onChange={(e) => setLink(e.target.value)} placeholder="Enlace de YouTube / Drive" />
-          <button type="button" className="mini" onClick={addLink}>Agregar</button>
-        </div>
-        <button className="btn" disabled={busy}>{busy ? 'Guardando…' : 'Publicar'}</button>
-      </div>
-      <p className="hint">Videos como archivo: hasta {videoLimitMB()} MB. Para videos más grandes pega un enlace.</p>
-    </form>
-  )
-}
-
-function MediaGallery({ media, onOpen }) {
-  if (!media?.length) return null
-  const cls = media.length === 1 ? 'one' : media.length === 2 ? 'two' : 'many'
-  return (
-    <div className={`post-media ${cls}`}>
-      {media.slice(0, 4).map((m, i) => (
-        <div key={i} className="post-media-item" onClick={() => m.type === 'image' && onOpen(media.slice(0, i).filter((x) => x.type === 'image').length)}>
-          {m.type === 'image' ? <img src={m.src} alt="" loading="lazy" /> : <VideoPlayer src={m.src} />}
-          {i === 3 && media.length > 4 && <div className="more" onClick={(e) => { e.stopPropagation(); onOpen(0) }}>+{media.length - 4}</div>}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function Post({ post, onChange, onDelete }) {
-  const [comment, setComment] = useState('')
-  const [author, setAuthor] = useState(getAuthor())
-  const [liked, setLiked] = useState(false)
-  const [lb, setLb] = useState(null)
-  const [showAll, setShowAll] = useState(false)
-  const toast = useToast()
-
-  const save = async (next) => {
-    onChange(next)
-    try { await updateItem(next) } catch (e) { toast(e.message, 'error'); onChange(post) }
-  }
-
-  const like = () => {
-    setLiked(true)
-    setTimeout(() => setLiked(false), 700)
-    save({ ...post, likes: (post.likes || 0) + 1 })
-  }
-
-  const addComment = (e) => {
-    e.preventDefault()
-    if (!comment.trim()) return
-    saveAuthor(author)
-    save({
-      ...post,
-      comments: [...(post.comments || []), { id: Date.now(), author: author.trim() || 'Anónimo', text: comment.trim(), date: Date.now() }],
-    })
-    setComment('')
-  }
-
-  const removeComment = (id) => save({ ...post, comments: post.comments.filter((c) => c.id !== id) })
-
-  const comments = post.comments || []
-  const visible = showAll ? comments : comments.slice(-3)
-
-  return (
-    <article className="card post">
-      <header className="post-head">
-        <span className="avatar">♥</span>
-        <div>
-          <b>{post.title || 'Nuestro recuerdo'}</b>
-          <small>{formatDate(post.moment || post.date)}</small>
-        </div>
-        <button className="icon-btn danger" title="Eliminar" onClick={() => confirmDelete(post, onDelete)}>🗑</button>
-      </header>
-      {post.text && <p className="post-text">{post.text}</p>}
-      <MediaGallery media={post.media} onOpen={setLb} />
-      <div className="post-actions">
-        <button className={`like ${liked ? 'pop' : ''}`} onClick={like}>
-          <span>♥</span> {post.likes || 0}
-        </button>
-        <span className="muted">💬 {comments.length} comentario{comments.length === 1 ? '' : 's'}</span>
-      </div>
-      <div className="comments">
-        {comments.length > 3 && !showAll && (
-          <button className="link" onClick={() => setShowAll(true)}>Ver los {comments.length} comentarios</button>
-        )}
-        {visible.map((c) => (
-          <div key={c.id} className="comment">
-            <b>{c.author}</b> {c.text}
-            <button className="x" onClick={() => removeComment(c.id)} title="Borrar">✕</button>
-          </div>
-        ))}
-        <form className="comment-form" onSubmit={addComment}>
-          <input className="author" value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="Tu nombre" />
-          <input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Escribe un comentario bonito…" />
-          <button className="mini">Enviar</button>
-        </form>
-      </div>
-      {lb !== null && (
-        <Lightbox items={post.media.filter((m) => m.type === 'image')} index={lb} onIndex={setLb} onClose={() => setLb(null)} />
-      )}
-    </article>
-  )
-}
-
-async function confirmDelete(post, onDelete) {
-  if (window.confirm('¿Eliminar este recuerdo?')) onDelete(post)
-}
-
+/* ---------- página ---------- */
 export default function Recuerdos() {
-  const [posts, setPosts] = useState(null)
+  const [data, setData] = useState(null)
+  const [filter, setFilter] = useState(null) // nombre de categoría o null = todas
+  const [modal, setModal] = useState(null) // 'new-cat' | {editCat} | {editPost}
   const toast = useToast()
+  const confirm = useConfirm()
 
-  useEffect(() => {
-    listItems('post').then(setPosts).catch((e) => { toast(e.message, 'error'); setPosts([]) })
-  }, [toast])
+  // Cada carga invalida la anterior y se ignora si la página ya se desmontó
+  const reqRef = useRef(0)
+  const loading = useRef(false)
+  const load = () => {
+    const req = ++reqRef.current
+    const alive = () => req === reqRef.current
+    loading.current = true
+    return loadScope('post')
+      .then((d) => { if (alive()) setData(d) })
+      .catch((e) => { if (alive()) { toast(e.message, 'error'); setData({ items: [], cats: [] }) } })
+      .finally(() => { if (alive()) loading.current = false })
+  }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); return () => { reqRef.current++ } }, [])
 
-  const remove = async (post) => {
+  const posts = data?.items || []
+  const groups = useMemo(() => (data ? buildGroups(data.items, data.cats) : []), [data])
+  const names = groups.map((g) => g.name).filter((n) => n !== NO_CATEGORY)
+  const shown = filter ? posts.filter((p) => catOf(p) === filter) : posts
+  // Seguro aunque la carga inicial no haya terminado (data todavía null)
+  const setPosts = (fn) => setData((d) => ({ cats: [], ...d, items: fn(d?.items || []) }))
+  const toggle = (name) => setFilter((f) => (f === name ? null : name))
+
+  const removePost = async (post) => {
+    const ok = await confirm({
+      title: 'Eliminar recuerdo',
+      message: `"${post.title || 'Sin título'}" y sus ${post.media?.length || 0} foto(s)/video(s) se eliminarán.`,
+      confirmText: 'Eliminar',
+      danger: true,
+    })
+    if (!ok) return
     try {
       await deleteItem(post.id)
       setPosts((p) => p.filter((x) => x.id !== post.id))
-    } catch (e) {
-      toast(e.message, 'error')
+      toast('Recuerdo eliminado')
+    } catch (e) { toast(e.message, 'error') }
+  }
+
+  const removeCat = async (g) => {
+    const ok = await confirm({
+      title: `Eliminar categoría "${g.name}"`,
+      message: g.list.length ? `Los ${g.list.length} recuerdo(s) no se borran: quedarán "${NO_CATEGORY}".` : 'La categoría está vacía.',
+      confirmText: 'Eliminar categoría',
+      danger: true,
+    })
+    if (!ok) return
+    try {
+      await deleteCategory(g, { keepItems: true })
+      if (filter === g.name) setFilter(null)
+      toast('Categoría eliminada')
+      load()
+    } catch (e) { toast(e.message, 'error') }
+  }
+
+  const coverOf = (g) => {
+    for (const p of g.list) {
+      const m = p.media?.find((x) => x.type === 'image') || p.media?.[0]
+      if (m) return m
     }
+    return null
   }
 
   return (
-    <section className="feed">
-      <div className="section-head">
-        <h2 className="script">Nuestros recuerdos</h2>
-        <p>Cada momento contigo merece quedarse guardado aquí.</p>
+    <section className="feed-page">
+      <header className="page-head">
+        <h1 className="page-title">Nuestros recuerdos</h1>
+        <p className="page-sub">Publicaciones con texto, fotos, videos y comentarios, ordenadas por categoría.</p>
+      </header>
+
+      <div className="strip-head">
+        <h2 className="label">Categorías</h2>
+        <button className="btn ghost sm" onClick={() => setModal('new-cat')}><Icon name="folderPlus" size={15} /> Nueva</button>
       </div>
-      <Composer onCreated={(p) => setPosts((cur) => [p, ...(cur || [])])} />
-      {posts === null && <div className="loader">♥</div>}
-      {posts?.length === 0 && <p className="empty">Aún no hay recuerdos. ¡Publica el primero! 💌</p>}
-      {posts?.map((p) => (
-        <Post
-          key={p.id}
-          post={p}
-          onDelete={remove}
-          onChange={(next) => setPosts((cur) => cur.map((x) => (x.id === next.id ? next : x)))}
+      <div className="cat-strip">
+        <button className={`strip-card all ${filter === null ? 'on' : ''}`} onClick={() => setFilter(null)}>
+          <div className="strip-cover"><Icon name="book" size={22} /></div>
+          <div className="strip-body"><b>Todos</b><span className="mono">{posts.length}</span></div>
+        </button>
+        {groups.map((g) => {
+          const cover = coverOf(g)
+          return (
+            <div key={g.name} className={`strip-card ${filter === g.name ? 'on' : ''}`}>
+              {/* Zona seleccionable separada de las herramientas: sin controles anidados */}
+              <div
+                role="button"
+                tabIndex={0}
+                aria-pressed={filter === g.name}
+                aria-label={`Filtrar por ${g.name} (${g.list.length})`}
+                onClick={() => toggle(g.name)}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(g.name) } }}
+              >
+                <div className="strip-cover">
+                  {cover ? (cover.type === 'image' ? <img src={cover.src} alt="" loading="lazy" /> : <VideoThumb src={cover.src} />) : <Icon name="folder" size={22} />}
+                </div>
+                <div className="strip-body"><b title={g.name}>{g.name}</b><span className="mono">{g.list.length}</span></div>
+              </div>
+              {g.name !== NO_CATEGORY && (
+                <div className="strip-tools">
+                  <button className="tool-btn" title="Editar" aria-label={`Editar categoría ${g.name}`} onClick={() => setModal({ editCat: g })}><Icon name="pencil" size={13} /></button>
+                  <button className="tool-btn danger" title="Eliminar" aria-label={`Eliminar categoría ${g.name}`} onClick={() => removeCat(g)}><Icon name="trash" size={13} /></button>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="feed">
+        <PostComposer
+          categories={names}
+          defaultCategory={filter && filter !== NO_CATEGORY ? filter : ''}
+          onCreated={(p) => {
+            setPosts((cur) => [p, ...cur.filter((x) => x.id !== p.id)])
+            // Publicado durante la carga: esa respuesta pudo salir antes de guardar → se recarga
+            if (loading.current) load()
+          }}
         />
-      ))}
+
+        {filter && (
+          <div className="filter-note">
+            <span>Mostrando <b>{filter}</b> · {plural(shown.length, ['recuerdo', 'recuerdos'])}</span>
+            <button className="link" onClick={() => setFilter(null)}>Ver todos</button>
+          </div>
+        )}
+
+        {!data && [0, 1].map((i) => <div key={i} className="card post skeleton post-skel" />)}
+        {data && shown.length === 0 && (
+          <div className="empty-state">
+            <Icon name="book" size={30} />
+            <h3>{filter ? 'Nada en esta categoría todavía' : 'Aún no hay recuerdos'}</h3>
+            <p>Escribe el primero arriba.</p>
+          </div>
+        )}
+        {shown.map((p) => (
+          <PostCard
+            key={p.id}
+            post={p}
+            onDelete={removePost}
+            onEdit={(post) => setModal({ editPost: post })}
+            onChange={(next) => setPosts((cur) => cur.map((x) => (x.id === p.id ? (typeof next === 'function' ? next(x) : next) : x)))}
+          />
+        ))}
+      </div>
+
+      {(modal === 'new-cat' || modal?.editCat) && (
+        <Modal title={modal.editCat ? 'Editar categoría' : 'Nueva categoría'} onClose={() => setModal(null)}>
+          <CategoryForm scope="post" label="categoría" group={modal.editCat} existing={groups.map((g) => g.name)}
+            onDone={(saved) => { if (modal.editCat && filter === modal.editCat.name) setFilter(saved.name); setModal(null); load() }} />
+        </Modal>
+      )}
+      {modal?.editPost && (
+        <Modal title="Editar recuerdo" wide onClose={() => setModal(null)}>
+          <PostEditForm
+            post={modal.editPost}
+            categories={names}
+            onSaved={(next) => { setModal(null); setPosts((cur) => cur.map((x) => (x.id === next.id ? next : x))) }}
+          />
+        </Modal>
+      )}
     </section>
   )
 }
