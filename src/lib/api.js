@@ -11,8 +11,13 @@
  *   photo -> foto de una categoría (lugar)      { category, title, src, date }
  *   video -> video de una categoría (lugar)     { category, title, src, date }
  *   info  -> texto de la vista Información      { title, message, signature }
- *   category -> categoría / lugar               { scope: 'photo' | 'video' | 'post', name, description, date }
- *   message -> mensaje del chat                  { from: 'M' | 'D', text, image?, hearts?: [], date }
+ *   category -> categoría / lugar               { scope: 'photo' | 'video' | 'post', name, description, lat?, lng?, date }
+ *   message -> mensaje del chat                  { topic, author, text, image?, hearts?: [], reactions?: { emoji: [nombres] },
+ *                                                  type?: 'nudge' ("Pensando en ti"), notified?, date } (antiguos: from 'M' | 'D')
+ *   typing  -> "escribiendo…" (uno por autor)    { author, at } (at = ms o 0; ver hooks/useTyping.js)
+ *   capsule -> cápsula del tiempo                { author, title, text, image?, openAt, date, notified? }
+ *   answer  -> respuesta a la pregunta del día    { key: 'YYYY-MM-DD' (día en Lima), author, text, date, edited? }
+ *   dailyLog -> avisos diarios ya enviados       { key: 'YYYY-MM-DD', date } (lo crea netlify/functions/daily.mjs)
  *   chatTopic -> tema del chat                   { name, date }
  *   couple  -> datos de la pareja                { names: { M, D }, since }
  *   pushSub -> suscripción a notificaciones      { author, endpoint, keys: { p256dh, auth }, date } (ver lib/push.js)
@@ -265,7 +270,7 @@ export async function listByKind(kind) {
 
 /* Exporta / importa todo (útil para pasar de local a la Mock API) */
 /* Las suscripciones push (pushSub) son de cada dispositivo: no van en el respaldo */
-const NO_BACKUP_KINDS = ['pushSub']
+const NO_BACKUP_KINDS = ['pushSub', 'typing', 'dailyLog']
 
 export async function exportAll() {
   const all = (await backend().list()) || []

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { createItem, deleteItem, listByKind, mutateItem, runAll } from '../lib/api'
-import { GENERAL, markChatSeen, topicOf } from '../lib/chat'
+import { createItem, deleteItem, getConfig, listByKind, mutateItem, runAll } from '../lib/api'
+import { GENERAL, hasReaction, HEART_EMOJI, markChatSeen, sameName, topicOf, TYPING_TTL_MS, withReaction } from '../lib/chat'
 import { notifyPartner } from '../lib/push'
 import { useToast } from '../components/Toast'
 
@@ -12,53 +12,106 @@ import { useToast } from '../components/Toast'
  *  - Cada mutación local sube `version`: las respuestas de sondeos iniciados antes se
  *    descartan, para que un sondeo lento no revierta un corazón o un borrado optimista.
  *  - Los mensajes temporales (tmp-…) se descartan en cuanto llega su versión guardada.
+ *  - En modo remoto el mismo sondeo lee los registros `typing` y expone `typing`: nombres de
+ *    otras personas escribiendo ahora. Para no depender del reloj del otro dispositivo, se
+ *    considera "escribiendo" a quien cambió su `at` (> 0) hace menos de TYPING_TTL_MS según
+ *    el reloj local. Si esa consulta falla, los mensajes se cargan igual.
+ *  - Los temas (chatTopic) se piden en el primer sondeo, en los refrescos explícitos y luego
+ *    cada TOPICS_EVERY sondeos, para no gastar peticiones a la Mock API.
+ *  - Al recibir el guardado de un corazón o una reacción, solo se reemplaza el mensaje si no hubo
+ *    otra mutación local desde que empezó esa acción (si no, borraría un optimista posterior).
  */
 
 const POLL_MS = 5000
+const TOPICS_EVERY = 6 // los temas cambian poco: se piden cada 6 sondeos (y siempre en refrescos explícitos)
 
 const byDate = (a, b) => (a.date || 0) - (b.date || 0)
 
 /* Firma barata para saber si algo cambió (sin incluir imágenes) */
-const sigOf = (list) => list.map((m) => `${m.id}:${m.date || 0}:${topicOf(m)}:${(m.hearts || []).join(',')}:${(m.text || '').length}`).join('|')
+const reactSig = (m) => Object.entries(m.reactions || {}).map(([e, n]) => `${e}=${(n || []).join(',')}`).join(';')
+const sigOf = (list) => list.map((m) => `${m.id}:${m.date || 0}:${topicOf(m)}:${(m.hearts || []).join(',')}:${reactSig(m)}:${(m.text || '').length}`).join('|')
 const topicSig = (list) => list.map((t) => `${t.id}:${t.name}`).join('|')
 
 /* ¿Este mensaje guardado es el mismo que un temporal? (createItem conserva la fecha del borrador) */
 const sameAsTmp = (saved, tmp) => (saved.date || 0) === tmp.date && (saved.author || '') === (tmp.author || '') && (saved.text || '') === (tmp.text || '') && topicOf(saved) === topicOf(tmp)
 
-const withHeart = (m, name, on) => {
-  const hearts = m.hearts || []
-  if (on) return hearts.includes(name) ? m : { ...m, hearts: [...hearts, name] }
-  return hearts.includes(name) ? { ...m, hearts: hearts.filter((h) => h !== name) } : m
-}
+const withHeart = (m, name, on) => withReaction(m, HEART_EMOJI, name, on)
 
-export function useChatMessages() {
+const NO_TYPING = []
+
+/* me: nombre propio (para excluirse del indicador "escribiendo…") */
+export function useChatMessages(me = '') {
   const [msgs, setMsgs] = useState(null)
   const [topics, setTopics] = useState([])
+  const [typing, setTyping] = useState(NO_TYPING)
+  const meRef = useRef(me)
+  const typingSeen = useRef(new Map()) // autor (minúsculas) -> { at, seenAt } según el reloj local
   const toast = useToast()
   const inFlight = useRef(false)
   const again = useRef(false)
   const version = useRef(0)
   const warned = useRef(false)
   const alive = useRef(true)
+  const polls = useRef(0) // sondeos del intervalo desde la última lectura de temas
 
-  const bump = () => { version.current++ }
+  // Identidad estable: así las acciones de abajo también lo son (ChatBubble va en memo)
+  const bump = useCallback(() => { version.current++ }, [])
+
+  useEffect(() => { meRef.current = me }, [me])
+
+  /* Calcula quién está escribiendo a partir de los registros `typing` (null = consulta fallida o modo local) */
+  const applyTyping = useCallback((recs) => {
+    if (!recs) return
+    const now = Date.now()
+    const seen = typingSeen.current
+    const latest = new Map() // si hay duplicados del mismo autor, gana el `at` más alto
+    for (const r of recs) {
+      const author = (r.author || '').trim()
+      if (!author) continue
+      const key = author.toLowerCase()
+      const at = Number(r.at) || 0
+      if (!latest.has(key) || at > latest.get(key).at) latest.set(key, { author, at })
+    }
+    const names = []
+    for (const [key, { author, at }] of latest) {
+      const prev = seen.get(key)
+      let seenAt = prev?.seenAt || 0
+      if (!prev) seenAt = at > 0 && Math.abs(now - at) < TYPING_TTL_MS ? now : 0
+      else if (prev.at !== at) seenAt = at > 0 ? now : 0
+      seen.set(key, { at, seenAt })
+      if (at > 0 && seenAt && now - seenAt < TYPING_TTL_MS && !sameName(author, meRef.current)) names.push(author)
+    }
+    names.sort()
+    setTyping((cur) => (cur.join('|') === names.join('|') ? cur : names.length ? names : NO_TYPING))
+  }, [])
 
   // fromPoll: los ticks del intervalo no se encolan (ya habrá otro tick); solo los refrescos explícitos repiten
   const refresh = useCallback(async (fromPoll = false) => {
     if (inFlight.current) { if (!fromPoll) again.current = true; return }
     inFlight.current = true
     const started = version.current
+    const withTopics = !fromPoll || polls.current % TOPICS_EVERY === 0
+    polls.current = withTopics ? 1 : polls.current + 1
     try {
-      const [list, tlist] = await Promise.all([listByKind('message'), listByKind('chatTopic')])
+      const remote = getConfig().mode === 'remote'
+      const [list, tlist, typingRecs] = await Promise.all([
+        listByKind('message'),
+        withTopics ? listByKind('chatTopic') : Promise.resolve(null),
+        remote ? listByKind('typing').catch(() => null) : Promise.resolve(null),
+      ])
       if (!alive.current) return
       warned.current = false
       markChatSeen()
+      if (remote) applyTyping(typingRecs)
+      else setTyping((cur) => (cur.length ? NO_TYPING : cur))
       // Hubo una mutación local mientras tanto: esta respuesta puede estar desactualizada.
       // Se descarta y el siguiente sondeo traerá el estado bueno.
       if (started !== version.current) return
       list.sort(byDate)
-      tlist.sort(byDate)
-      setTopics((cur) => (topicSig(cur) === topicSig(tlist) ? cur : tlist))
+      if (tlist) {
+        tlist.sort(byDate)
+        setTopics((cur) => (topicSig(cur) === topicSig(tlist) ? cur : tlist))
+      }
       setMsgs((cur) => {
         const pending = (cur || []).filter((m) => m.pending)
         const keep = pending.filter((p) => !list.some((s) => sameAsTmp(s, p)))
@@ -77,7 +130,7 @@ export function useChatMessages() {
         setTimeout(() => { if (alive.current) refresh() }, 0)
       }
     }
-  }, [toast])
+  }, [toast, applyTyping])
 
   useEffect(() => {
     alive.current = true
@@ -110,23 +163,44 @@ export function useChatMessages() {
   }
 
   /* Corazón del autor: optimista y mezclado sobre la versión más reciente del servidor */
-  const toggleHeart = async (m, me) => {
+  const toggleHeart = useCallback(async (m, me) => {
     if (m.pending || !me) return
     const on = !(m.hearts || []).includes(me)
     bump()
+    const mark = version.current
     setMsgs((cur) => (cur || []).map((x) => (x.id === m.id ? withHeart(x, me, on) : x)))
     try {
       const saved = await mutateItem(m.id, (x) => withHeart(x, me, on))
-      setMsgs((cur) => (cur || []).map((x) => (x.id === saved.id ? saved : x)))
+      // Otra acción local empezó mientras tanto: no se pisa su optimista (el siguiente sondeo trae lo bueno)
+      if (mark === version.current) setMsgs((cur) => (cur || []).map((x) => (x.id === saved.id ? saved : x)))
     } catch (e) {
       setMsgs((cur) => (cur || []).map((x) => (x.id === m.id ? withHeart(x, me, !on) : x)))
       toast(e.message, 'error')
     } finally {
       bump()
     }
-  }
+  }, [toast, bump])
 
-  const remove = async (m) => {
+  /* Reacción con emoji (varias distintas por persona). El ❤️ usa `hearts` vía toggleHeart. */
+  const toggleReaction = useCallback(async (m, emoji, me) => {
+    if (emoji === HEART_EMOJI) return toggleHeart(m, me)
+    if (m.pending || !me) return
+    const on = !hasReaction(m, emoji, me)
+    bump()
+    const mark = version.current
+    setMsgs((cur) => (cur || []).map((x) => (x.id === m.id ? withReaction(x, emoji, me, on) : x)))
+    try {
+      const saved = await mutateItem(m.id, (x) => withReaction(x, emoji, me, on))
+      if (mark === version.current) setMsgs((cur) => (cur || []).map((x) => (x.id === saved.id ? saved : x)))
+    } catch (e) {
+      setMsgs((cur) => (cur || []).map((x) => (x.id === m.id ? withReaction(x, emoji, me, !on) : x)))
+      toast(e.message, 'error')
+    } finally {
+      bump()
+    }
+  }, [toast, bump, toggleHeart])
+
+  const remove = useCallback(async (m) => {
     bump()
     setMsgs((cur) => (cur || []).filter((x) => x.id !== m.id))
     try {
@@ -138,7 +212,7 @@ export function useChatMessages() {
       return
     }
     bump()
-  }
+  }, [toast, bump, refresh])
 
   /* Crea un tema. Devuelve el guardado o null si falló. */
   const addTopic = async (name) => {
@@ -181,5 +255,5 @@ export function useChatMessages() {
     }
   }
 
-  return { msgs, topics, send, toggleHeart, remove, addTopic, removeTopic, refresh }
+  return { msgs, topics, typing, send, toggleHeart, toggleReaction, remove, addTopic, removeTopic, refresh }
 }

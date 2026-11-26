@@ -18,6 +18,12 @@ export const SCENES = {
   videos: { land: 'city', sun: [800, 600], label: 'Ciudad' },
   chat: { land: 'beach', sun: [800, 608], label: 'Playa', reflect: 0.9 },
   informacion: { land: 'sea', sun: [800, 612], label: 'Mar al anochecer', dusk: true, reflect: 0.7 },
+  // Cápsula: lago entre montañas al anochecer (estrellas, sol ya bajo y reflejo suave)
+  capsula: { land: 'lake', sun: [800, 614], label: 'Lago al anochecer', dusk: true, reflect: 0.65 },
+  // Mapa: costa al atardecer, como la portada (mar azul con reflejo naranja)
+  mapa: { land: 'sea', sun: [800, 602], label: 'Costa al atardecer', reflect: 1 },
+  // Pregunta del día: playa al anochecer, tranquila para pensar la respuesta
+  pregunta: { land: 'beach', sun: [800, 612], label: 'Playa al anochecer', dusk: true, reflect: 0.7 },
 }
 
 export function sceneFor(pathname) {

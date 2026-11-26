@@ -1,21 +1,24 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { getConfig } from '../lib/api'
 import { compressImage } from '../lib/media'
 import { cachedCouple, loadCouple } from '../lib/couple'
-import { authorOf, dayKey, dayLabel, GENERAL, initial, myName, readTopicSeen, saveMyName, topicOf, writeTopicSeen } from '../lib/chat'
+import { authorOf, dayKey, dayLabel, GENERAL, initial, myName, readTopicSeen, saveMyName, topicOf, typingLabel, writeTopicSeen } from '../lib/chat'
 import { useChatMessages } from '../hooks/useChatMessages'
+import { useTyping } from '../hooks/useTyping'
 import { disablePush, enablePush, pushAvailable, pushStatus, renamePush } from '../lib/push'
 import { useToast } from '../components/Toast'
 import { useConfirm } from '../components/Confirm'
 import Lightbox from '../components/Lightbox'
 import ChatBubble from '../components/ChatBubble'
 import ChatInput from '../components/ChatInput'
+import NudgeButton from '../components/NudgeButton'
 import Icon from '../components/Icon'
 
 /*
  * Un solo chat para los dos, separado en pestañas por tema.
- *   message:   { topic, author, text, image?, hearts: [nombres], date }
+ *   message:   { topic, author, text, image?, hearts: [nombres], reactions?: { emoji: [nombres] }, type?: 'nudge', date }
  *   chatTopic: { name, date }
+ *   typing:    { author, at }  (solo modo remoto; ver hooks/useTyping.js)
  * "General" siempre existe. Los mensajes antiguos sin tema van a General.
  * Identidad y "leídos" en src/lib/chat.js; sondeo y acciones en src/hooks/useChatMessages.js.
  */
@@ -42,7 +45,8 @@ export default function Chat() {
   const toast = useToast()
   const confirm = useConfirm()
   const remote = getConfig().mode === 'remote'
-  const { msgs, topics, send: sendMessage, toggleHeart, remove: removeMessage, addTopic: createTopic, removeTopic: moveTopicToGeneral } = useChatMessages()
+  const { msgs, topics, typing, send: sendMessage, toggleHeart, toggleReaction, remove: removeMessage, addTopic: createTopic, removeTopic: moveTopicToGeneral } = useChatMessages(me)
+  useTyping(me, text, remote)
 
   useEffect(() => {
     let alive = true
@@ -150,9 +154,15 @@ export default function Chat() {
     setSending(false)
   }
 
-  const heart = (m) => toggleHeart(m, me)
+  // Callbacks estables: ChatBubble va en memo y así escribir o el indicador "escribiendo…" no re-renderizan cada burbuja
+  const heart = useCallback((m) => toggleHeart(m, me), [toggleHeart, me])
+  const react = useCallback((m, emoji) => toggleReaction(m, emoji, me), [toggleReaction, me])
 
-  const remove = async (m) => {
+  // "Pensando en ti": mismo flujo de envío (optimista + aviso push)
+  const sendNudge = (draft) => { stick.current = true; return sendMessage(draft) }
+  const askName = () => { setEditingName(true); toast('Primero escribe tu nombre', 'error') }
+
+  const remove = useCallback(async (m) => {
     const ok = await confirm({
       title: '¿Borrar este mensaje?',
       message: 'Se borrará para los dos y no se puede deshacer.',
@@ -160,7 +170,7 @@ export default function Chat() {
       danger: true,
     })
     if (ok) removeMessage(m)
-  }
+  }, [confirm, removeMessage])
 
   const addTopic = async (name) => {
     const n = (name || '').trim()
@@ -265,14 +275,24 @@ export default function Chat() {
             m.day ? (
               <div key={m.id} className="day-sep"><span>{dayLabel(m.day)}</span></div>
             ) : (
-              <ChatBubble key={m.id} m={m} me={me} author={authorOf(m, couple)} mine={!!me && authorOf(m, couple) === me} onHeart={heart} onDelete={remove} onOpen={setLb} />
+              <ChatBubble key={m.id} m={m} me={me} author={authorOf(m, couple)} mine={!!me && authorOf(m, couple) === me} onHeart={heart} onReact={react} onDelete={remove} onOpen={setLb} />
             ),
           )}
         </div>
 
         <div className="quick">
+          <NudgeButton me={me} topic={tab} onSend={sendNudge} onNoName={askName} />
           {QUICK.map((q) => <button key={q} className="chip" disabled={sending} onClick={() => send(null, q)}>{q}</button>)}
           {isCustom && visible.length > 0 && <button className="chip danger-chip" onClick={() => removeTopic(tab)}><Icon name="trash" size={12} /> Eliminar tema</button>}
+        </div>
+
+        <div className="typing-indicator" aria-live="polite">
+          {remote && typing.length > 0 && (
+            <>
+              <span className="typing-dots" aria-hidden="true"><i /><i /><i /></span>
+              <span>{typingLabel(typing)}</span>
+            </>
+          )}
         </div>
 
         <ChatInput text={text} setText={setText} image={image} setImage={setImage} onSend={send} onPickImage={pickImage} tab={tab} />

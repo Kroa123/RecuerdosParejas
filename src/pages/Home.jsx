@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { listByKind } from '../lib/api'
+import { Link, useNavigate } from 'react-router-dom'
+import { createItem, listByKind } from '../lib/api'
+import { notifyPartner } from '../lib/push'
 import { cachedCouple, daysTogether, loadCouple, saveCouple } from '../lib/couple'
 import { formatDate, fromDateInput, toDateInput } from '../lib/media'
 import Icon from '../components/Icon'
 import Modal from '../components/Modal'
 import { useToast } from '../components/Toast'
 import HeartFireworks from '../components/HeartFireworks'
+import NudgeButton from '../components/NudgeButton'
 
 const HOLD_MS = 4000 // tiempo manteniendo presionado para que explote
 const BOOM_MS = 2000 // duración de la explosión
@@ -74,6 +76,8 @@ export default function Home() {
   const [charge, setCharge] = useState(0) // 0..1 mientras mantienes presionado
   const [boom, setBoom] = useState(false)
   const hold = useRef(null)
+  const toast = useToast()
+  const navigate = useNavigate()
 
   const timers = useRef(new Set())
 
@@ -150,6 +154,22 @@ export default function Home() {
   useEffect(() => stopHold, [stopHold])
   const endBoom = useCallback(() => setBoom(false), [])
 
+  /* "Pensando en ti" desde la portada: se guarda como mensaje del chat y se avisa por push */
+  const sendNudge = async (draft) => {
+    try {
+      const saved = await createItem('message', draft)
+      notifyPartner(saved?.id)
+      return true
+    } catch (e) {
+      toast(e.message, 'error')
+      return false
+    }
+  }
+  const askName = () => {
+    toast('Primero escribe tu nombre en el chat, así sabrá que eres tú 💗')
+    navigate('/chat')
+  }
+
   const days = daysTogether(couple.since)
   const left = Math.ceil((1 - charge) * (HOLD_MS / 1000))
 
@@ -211,6 +231,7 @@ export default function Home() {
         <div className="hero-cta">
           <Link to="/recuerdos" className="btn glow">Ver nuestros recuerdos</Link>
           <Link to="/chat" className="btn glass-btn"><Icon name="message" size={16} /> Escribirle</Link>
+          <NudgeButton className="btn glass-btn nudge-btn" onSend={sendNudge} onNoName={askName} />
         </div>
       </div>
 

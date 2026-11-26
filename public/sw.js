@@ -16,9 +16,10 @@ self.addEventListener('push', (event) => {
   }
 
   event.waitUntil((async () => {
-    // Si el chat ya está abierto y enfocado, el mensaje se ve ahí: no hace falta avisar
+    // Si la página del aviso (p. ej. el chat) ya está abierta y enfocada, se ve ahí: no hace falta avisar
+    const target = new URL(data.url || '/chat', self.location.origin).pathname
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
-    if (wins.some((w) => w.focused && new URL(w.url).pathname.startsWith('/chat'))) return
+    if (wins.some((w) => w.focused && new URL(w.url).pathname.startsWith(target))) return
 
     await self.registration.showNotification(data.title || 'Nuevo mensaje', {
       body: data.body || '',
@@ -39,10 +40,11 @@ self.addEventListener('notificationclick', (event) => {
   event.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
     const same = wins.filter((w) => new URL(w.url).origin === self.location.origin)
-    // 1) Una pestaña que ya está en el chat
-    const onChat = same.find((w) => new URL(w.url).pathname.startsWith('/chat'))
-    if (onChat) return onChat.focus()
-    // 2) Otra pestaña de la página: se lleva al chat (navigate solo funciona si el SW la controla)
+    // 1) Una pestaña que ya está en la página del aviso (chat, cápsula o pregunta)
+    const path = new URL(url).pathname
+    const already = same.find((w) => new URL(w.url).pathname.startsWith(path))
+    if (already) return already.focus()
+    // 2) Otra pestaña de la página: se lleva a esa ruta (navigate solo funciona si el SW la controla)
     for (const w of same) {
       try {
         const moved = await w.navigate(url)
