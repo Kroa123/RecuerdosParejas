@@ -4,6 +4,7 @@ import { compressImage } from '../lib/media'
 import { cachedCouple, loadCouple } from '../lib/couple'
 import { authorOf, dayKey, dayLabel, GENERAL, initial, myName, readTopicSeen, saveMyName, topicOf, writeTopicSeen } from '../lib/chat'
 import { useChatMessages } from '../hooks/useChatMessages'
+import { disablePush, enablePush, pushAvailable, pushStatus, renamePush } from '../lib/push'
 import { useToast } from '../components/Toast'
 import { useConfirm } from '../components/Confirm'
 import Lightbox from '../components/Lightbox'
@@ -34,6 +35,8 @@ export default function Chat() {
   const [image, setImage] = useState(null)
   const [sending, setSending] = useState(false)
   const [lb, setLb] = useState(null)
+  const [push, setPush] = useState(null) // null = comprobando | 'on' | 'off' | 'denied' | 'unavailable'
+  const [pushBusy, setPushBusy] = useState(false)
   const listRef = useRef(null)
   const stick = useRef(true)
   const toast = useToast()
@@ -44,6 +47,12 @@ export default function Chat() {
   useEffect(() => {
     let alive = true
     loadCouple().then((c) => { if (alive) setCouple(c) }).catch(() => {})
+    return () => { alive = false }
+  }, [])
+
+  useEffect(() => {
+    let alive = true
+    pushStatus().then((s) => { if (alive) setPush(s) })
     return () => { alive = false }
   }, [])
 
@@ -102,6 +111,29 @@ export default function Chat() {
     const n = nameDraft.trim()
     if (!n) return toast('Escribe tu nombre para firmar tus mensajes', 'error')
     saveMyName(n); setMe(n); setEditingName(false)
+    if (push === 'on') renamePush(n).catch(() => toast('No se pudo actualizar tu nombre en los avisos', 'error'))
+  }
+
+  const togglePush = async () => {
+    if (pushBusy) return
+    if (!me) { setEditingName(true); return toast('Primero escribe tu nombre', 'error') }
+    setPushBusy(true)
+    try {
+      if (push === 'on') {
+        await disablePush()
+        setPush('off')
+        toast('Notificaciones desactivadas en este dispositivo')
+      } else {
+        await enablePush(me)
+        setPush('on')
+        toast('Listo: te avisaremos cuando te escriban, aunque la página esté cerrada')
+      }
+    } catch (e) {
+      toast(e.message, 'error')
+      setPush(await pushStatus())
+    } finally {
+      setPushBusy(false)
+    }
   }
 
   const send = async (e, quick) => {
@@ -177,6 +209,19 @@ export default function Chat() {
           ) : (
             <button className="who-chip" onClick={() => { setNameDraft(me); setEditingName(true) }} title="Cambiar tu nombre">
               <span className="avatar xs">{initial(me)}</span> {me} <Icon name="pencil" size={12} />
+            </button>
+          )}
+          {pushAvailable() && push && push !== 'unavailable' && (
+            <button
+              className={`who-chip push-chip ${push === 'on' ? 'on' : ''}`}
+              onClick={togglePush}
+              disabled={pushBusy}
+              aria-pressed={push === 'on'}
+              aria-label={push === 'on' ? 'Desactivar notificaciones' : 'Activar notificaciones'}
+              title={push === 'denied' ? 'Notificaciones bloqueadas en este navegador' : push === 'on' ? 'Desactivar notificaciones' : 'Recibir notificaciones aunque la página esté cerrada'}
+            >
+              <Icon name={push === 'on' ? 'bell' : 'bellOff'} size={15} />
+              <span className="push-label">{push === 'on' ? 'Avisos' : 'Activar avisos'}</span>
             </button>
           )}
         </header>

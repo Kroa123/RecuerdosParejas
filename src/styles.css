@@ -1365,3 +1365,15 @@ label.btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; filter: none
 .btn:disabled, .btn[aria-disabled="true"], .send:disabled, .icon-btn:disabled, .chip:disabled, .mini:disabled, .like:disabled {
   translate: none; scale: none;
 }
+
+/* Botón de notificaciones del chat (campana junto al nombre) */
+.push-chip { padding: 0 12px; flex: none; max-width: none; }
+.push-chip .ico { color: var(--faint); }
+.push-chip.on { color: var(--accent); border-color: var(--accent-line); }
+.push-chip.on .ico { color: var(--accent); }
+.push-chip:disabled { opacity: .6; cursor: progress; }
+@media (max-width: 520px) {
+  /* En el celular solo la campana: la etiqueta queda para lectores de pantalla vía aria-label */
+  .push-chip { width: 40px; padding: 0; justify-content: center; }
+  .push-chip .push-label { display: none; }
+}

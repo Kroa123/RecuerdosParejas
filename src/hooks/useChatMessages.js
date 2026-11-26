@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createItem, deleteItem, listByKind, mutateItem, runAll } from '../lib/api'
 import { GENERAL, markChatSeen, topicOf } from '../lib/chat'
+import { notifyPartner } from '../lib/push'
 import { useToast } from '../components/Toast'
 
 /*
@@ -92,6 +93,7 @@ export function useChatMessages() {
     setMsgs((cur) => [...(cur || []), tmp])
     try {
       const saved = await createItem('message', draft)
+      notifyPartner(saved?.id) // aviso push a la otra persona (no bloquea ni falla el envío)
       // Si un sondeo ya trajo el guardado, se quita el temporal en vez de duplicar
       setMsgs((cur) => {
         const list = cur || []

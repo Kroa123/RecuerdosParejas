@@ -15,6 +15,7 @@
  *   message -> mensaje del chat                  { from: 'M' | 'D', text, image?, hearts?: [], date }
  *   chatTopic -> tema del chat                   { name, date }
  *   couple  -> datos de la pareja                { names: { M, D }, since }
+ *   pushSub -> suscripción a notificaciones      { author, endpoint, keys: { p256dh, auth }, date } (ver lib/push.js)
  * Así basta con crear un único recurso en MockAPI (el plan gratis limita recursos).
  *
  * API pública:
@@ -263,8 +264,12 @@ export async function listByKind(kind) {
 }
 
 /* Exporta / importa todo (útil para pasar de local a la Mock API) */
+/* Las suscripciones push (pushSub) son de cada dispositivo: no van en el respaldo */
+const NO_BACKUP_KINDS = ['pushSub']
+
 export async function exportAll() {
-  return backend().list()
+  const all = (await backend().list()) || []
+  return all.filter((i) => !NO_BACKUP_KINDS.includes(i.kind))
 }
 
 /* Tipos de los que solo debe existir un registro */
@@ -310,7 +315,7 @@ export async function importAll(items) {
   for (const item of items) {
     const { id, ...rest } = item
     const fp = fingerprint(rest)
-    if ((id !== undefined && ids.has(String(id))) || prints.has(fp) || singles.has(rest.kind)) {
+    if (NO_BACKUP_KINDS.includes(rest.kind) || (id !== undefined && ids.has(String(id))) || prints.has(fp) || singles.has(rest.kind)) {
       result.skipped++
       continue
     }
