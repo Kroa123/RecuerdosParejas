@@ -20,7 +20,7 @@ const SECTIONS = [
   { to: '/informacion', title: 'Para ti', text: 'Una carta y un ramo de tulipanes que se dibuja solo', icon: 'mail', key: null, tone: 'pink', cta: 'Leer la carta' },
 ]
 
-const PHRASES = ['Te amo Maryori Huamanchumo', 'Eres mi lugar favorito', 'Mi persona favorita', 'Contigo todo es mejor', 'Para siempre mi monita hermosa']
+const PHRASES = ['Te amo Maryori Huamanchumo', 'Eres mi lugar favorito', 'Mi persona favorita', 'Contigo todo es mejor', 'Para siempre mi monita hermosa', 'Mi monita hermosa bella hermosa guapa preciosa' ]
 const HEART = 'M100 170 C 40 125, 5 95, 5 55 C 5 25, 30 5, 58 5 C 78 5, 92 16, 100 32 C 108 16, 122 5, 142 5 C 170 5, 195 25, 195 55 C 195 95, 160 125, 100 170 Z'
 
 /* Fotos más recientes (de Fotos y de las publicaciones) */
